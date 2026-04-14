@@ -211,7 +211,6 @@ if zip_file and master_file and percorso_selezionato:
             curr_loss = float(row[L["col_loss"]]) if pd.notna(row[L["col_loss"]]) and str(row[L["col_loss"]]).strip() != "" else 0.0
             orig_loss = float(row["_Orig_Loss"]) if pd.notna(row["_Orig_Loss"]) and str(row["_Orig_Loss"]).strip() != "" else 0.0
             
-            # Controlla se l'utente ha modificato manualmente la riga rispetto all'originale
             if str(row[L["col_tech"]]) != str(row["_Orig_Tech"]) or str(row[L["col_code"]]) != str(row["_Orig_Code"]) or curr_loss != orig_loss:
                 is_modded = True
         except:
@@ -231,7 +230,7 @@ if zip_file and master_file and percorso_selezionato:
             
         if t_id in valid_tech_ids and c_err in valid_error_codes:
             if is_modded:
-                return L["stat_ok_mod"] # Riga corretta a mano: Rimuove la X e aggiunge la spunta "Corretto"
+                return L["stat_ok_mod"]
             return L["stat_ok"]
             
         return L["stat_err"]
@@ -287,7 +286,6 @@ if zip_file and master_file and percorso_selezionato:
             df_base = pd.DataFrame(rows, columns=colonne_base)
             
             if not df_base.empty:
-                # Creiamo delle colonne invisibili per ricordare i valori originali e intercettare le modifiche umane
                 df_base["_Orig_Tech"] = df_base[L["col_tech"]]
                 df_base["_Orig_Code"] = df_base[L["col_code"]]
                 df_base["_Orig_Loss"] = df_base[L["col_loss"]]
@@ -296,70 +294,76 @@ if zip_file and master_file and percorso_selezionato:
                 df_base[L["col_status"]] = pd.Series(dtype=str)
                 st.warning(L["warn_empty"])
 
-            # Salviamo il tutto nella cassaforte
             st.session_state.df_main = df_base
             st.session_state.current_file = percorso_selezionato
 
-    # --- LAVORIAMO SULLA MEMORIA ---
-    df_main = st.session_state.df_main
+    # --- FUNZIONE FRAGMENT (ISOLA IL REFRESH DELLA TABELLA) ---
+    @st.fragment
+    def render_editor_section():
+        df_main = st.session_state.df_main
 
-    st.subheader(L["review_title"])
-    
-    with st.expander(L["filter_title"], expanded=True):
-        col_f1, col_f2, col_f3 = st.columns(3)
+        st.subheader(L["review_title"])
         
-        opzioni_stato = df_main[L["col_status"]].unique().tolist() if not df_main.empty else []
-        opzioni_tech = df_main[L["col_tech"]].unique().tolist() if not df_main.empty else []
-        opzioni_err = df_main[L["col_code"]].unique().tolist() if not df_main.empty else []
+        with st.expander(L["filter_title"], expanded=True):
+            col_f1, col_f2, col_f3 = st.columns(3)
+            
+            opzioni_stato = df_main[L["col_status"]].unique().tolist() if not df_main.empty else []
+            opzioni_tech = df_main[L["col_tech"]].unique().tolist() if not df_main.empty else []
+            opzioni_err = df_main[L["col_code"]].unique().tolist() if not df_main.empty else []
+            
+            filtro_stato = col_f1.multiselect(L["filter_status"], options=opzioni_stato, default=[])
+            filtro_techid = col_f2.multiselect(L["filter_tech"], options=opzioni_tech, default=[])
+            filtro_errore = col_f3.multiselect(L["filter_err"], options=opzioni_err, default=[])
+            
+        df_filtrato = df_main.copy()
+        if filtro_stato:
+            df_filtrato = df_filtrato[df_filtrato[L["col_status"]].isin(filtro_stato)]
+        if filtro_techid:
+            df_filtrato = df_filtrato[df_filtrato[L["col_tech"]].isin(filtro_techid)]
+        if filtro_errore:
+            df_filtrato = df_filtrato[df_filtrato[L["col_code"]].isin(filtro_errore)]
         
-        filtro_stato = col_f1.multiselect(L["filter_status"], options=opzioni_stato, default=[])
-        filtro_techid = col_f2.multiselect(L["filter_tech"], options=opzioni_tech, default=[])
-        filtro_errore = col_f3.multiselect(L["filter_err"], options=opzioni_err, default=[])
-        
-    df_filtrato = df_main.copy()
-    if filtro_stato:
-        df_filtrato = df_filtrato[df_filtrato[L["col_status"]].isin(filtro_stato)]
-    if filtro_techid:
-        df_filtrato = df_filtrato[df_filtrato[L["col_tech"]].isin(filtro_techid)]
-    if filtro_errore:
-        df_filtrato = df_filtrato[df_filtrato[L["col_code"]].isin(filtro_errore)]
-    
-    df_edited_filtered = st.data_editor(
-        df_filtrato, 
-        use_container_width=True, 
-        num_rows="dynamic",
-        column_config={
-            L["col_photo"]: st.column_config.TextColumn("File", disabled=True),
-            L["col_status"]: st.column_config.TextColumn("Status", disabled=True),
-            L["col_notes"]: st.column_config.TextColumn("IA Log", disabled=True),
-            L["col_loss"]: st.column_config.NumberColumn("Min.", format="%.2f"),
-            "_Orig_Tech": None,  # Nascondiamo le colonne segrete
-            "_Orig_Code": None,
-            "_Orig_Loss": None
-        }
-    )
+        df_edited_filtered = st.data_editor(
+            df_filtrato, 
+            use_container_width=True, 
+            num_rows="dynamic",
+            column_config={
+                L["col_photo"]: st.column_config.TextColumn("File", disabled=True),
+                L["col_status"]: st.column_config.TextColumn("Status", disabled=True),
+                L["col_notes"]: st.column_config.TextColumn("IA Log", disabled=True),
+                L["col_loss"]: st.column_config.NumberColumn("Min.", format="%.2f"),
+                "_Orig_Tech": None,  
+                "_Orig_Code": None,
+                "_Orig_Loss": None
+            }
+        )
 
-    # --- RICUCITURA DATI E RICALCOLO DINAMICO ---
-    if not df_main.empty and not df_edited_filtered.empty:
-        # Salviamo il vecchio stato per capire se qualcosa è diventato improvvisamente valido
-        vecchio_status = st.session_state.df_main[L["col_status"]].copy()
-        
-        st.session_state.df_main.update(df_edited_filtered)
-        st.session_state.df_main[L["col_status"]] = st.session_state.df_main.apply(evaluate_status, axis=1)
+        # --- RICUCITURA DATI E RICALCOLO DINAMICO ---
+        if not df_main.empty and not df_edited_filtered.empty:
+            vecchio_status = st.session_state.df_main[L["col_status"]].copy()
+            
+            st.session_state.df_main.update(df_edited_filtered)
+            st.session_state.df_main[L["col_status"]] = st.session_state.df_main.apply(evaluate_status, axis=1)
 
-        # Se il fatto di aver corretto la riga ne ha modificato lo stato (es. da ❌ a ✅ OK Corretto), ricarichiamo la UI istantaneamente
-        if not st.session_state.df_main[L["col_status"]].equals(vecchio_status):
-            st.rerun()
+            if not st.session_state.df_main[L["col_status"]].equals(vecchio_status):
+                st.rerun(scope="fragment")
+                
+    # Richiamo il Fragment
+    if "df_main" in st.session_state and not st.session_state.df_main.empty:
+        render_editor_section()
 
     # --- SALVATAGGIO DEFINITIVO ---
     if st.button(L["btn_save"]):
-        if df_main.empty:
+        if st.session_state.df_main.empty:
             st.error(L["err_no_data"])
             st.stop()
             
         try:
             output_buffer = io.BytesIO(master_file.getvalue())
-            book = load_workbook(output_buffer, keep_vba=True)
+            
+            # --- FIX PER ERRORE EXCEL "externalLink1.xml" ---
+            # keep_links=False impedisce a openpyxl di corrompere i link esterni presenti nel file
+            book = load_workbook(output_buffer, keep_vba=True, keep_links=False)
             
             nome_foglio = 'ParetoDATA'
             if nome_foglio not in book.sheetnames:
@@ -386,7 +390,7 @@ if zip_file and master_file and percorso_selezionato:
             righe_scartate = 0
             colonne_dati = [12, 13, 14, 15, 16] 
             
-            for r in df_main.to_dict('records'):
+            for r in st.session_state.df_main.to_dict('records'):
                 t_id = str(r.get(L['col_tech'], '')).strip().upper()
                 c_err = str(r.get(L['col_code'], '')).strip().upper()
                 
@@ -396,6 +400,8 @@ if zip_file and master_file and percorso_selezionato:
                     perdita_val = 0.0
                 
                 if t_id in valid_tech_ids and c_err in valid_error_codes and perdita_val >= 5:
+                    # Inserimento della data come stringa per evitare sfasamenti, ma in futuro se i colleghi notano i "triangolini verdi"
+                    # si può usare datetime.strptime(r.get(L['col_date'], ''), "%d/%m/%Y")
                     ws.cell(row=next_row, column=12).value = r.get(L['col_date'], '')         
                     ws.cell(row=next_row, column=13).value = t_id                      
                     try:
